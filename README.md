@@ -1,5 +1,29 @@
 # 1️⃣🐝🏎️ The One Billion Row Challenge
 
+### BROOP Entry 2025-2026 - Better Late Than Never ###
+# 😳
+
+After building and preparing the measurements file (see below), run with : `time ./calculate_average_broop.sh`
+
+This solution is as "standard" as I could make it without doing any bit hacking, unsafe or writing my own hashtable :0 I do calculate my own
+hash for the station names, as I don't want to create a new String \[atleast] a billion times. There are a few places where I do things "low level style"
+such as checking for null on a Map.get() instead of doing nice things like merge() or putIfAbsent() - which, considering the number of such
+operations, I was able to measure improvement in speed. The key for me was object creation (String mostly), handling of numeric data (int vs float),
+and obviously parallelism (via chunks and segments). As for the chunking, the most complicated piece for me was handling the boundaries corresponding
+to newlines - I had to deal with truncation bugs for a while due to this.
+
+Besides all that, I achieved a consistent sub 4 second result on a 12 core Apple M2 Max Macbook Pro with 64GB RAM. Many times in  ~3.5 seconds.
+The baseline hovered around 3 minutes on this machine.
+
+I learned a lot doing this - mostly about perseverance. There's always something else you can do!
+I also enjoyed reading many of the other solutions. So much of the the code in this project is fantastic. Thanks for all the ideas!
+
+There are basically two types of optimizations here: 
+1. Idea-based: e.g. don't store station names - hash the bytes, don't go near String creation and keep a lookup table for later. Why use floating point when we know the exact format of the data?
+2. Code-based: the HashMap stuff I mentioned above; Stream vs looping (I use exactly one Stream - its concise and costs almost no time)
+
+----------
+
 _Status Feb 4: The final leaderboards [have been published](https://www.morling.dev/blog/1brc-results-are-in/). Congrats to all the winners, and a big thank you to everyone participating in this challenge as well as to everyone helping to organize it!_
 
 _Status Feb 3: All entries have been evaluated and I am in the process of finalizing the leaderboards._
