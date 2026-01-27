@@ -44,16 +44,14 @@ public class CalculateAverage_broop {
             long chunkSize = fileSize / numChunks;
 
             String result = IntStream.range(0, numChunks)
-                    .parallel() // Enable parallel execution across multiple CPU cores
-                    // mapToObj so we don't need to box or cast...
-                    .mapToObj(i -> {
+                    .parallel()
+                    .mapToObj(i -> { // mapToObj so we don't need to box or cast...
                         long start = i * chunkSize;
                         // make sure the final chunk includes everything
                         long end = (i == numChunks - 1) ? fileSize : (i + 1) * chunkSize;
                         return processChunk(fileName, start, end, fileSize);
                     })
                     .collect(chunkResultCollector());
-
             System.out.println(result);
         }
     }
