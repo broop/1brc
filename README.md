@@ -18,9 +18,201 @@ The baseline hovered around 3 minutes on this machine.
 I learned a lot doing this - mostly about perseverance. There's always something else you can do!
 I also enjoyed reading many of the other solutions. So much of the the code in this project is fantastic. Thanks for all the ideas!
 
-There are basically two types of optimizations here: 
+There are basically two types of optimizations here:
 1. Idea-based: e.g. don't store station names - hash the bytes, don't go near String creation and keep a lookup table for later. Why use floating point when we know the exact format of the data?
 2. Code-based: the HashMap stuff I mentioned above; Stream vs looping (I use exactly one Stream - its concise and costs almost no time)
+
+## Solution Features: CalculateAverage_broop
+
+### 1. Parallel Chunk Processing
+
+The file is divided into chunks equal to the number of available processors, processed in parallel using a single parallel stream:
+
+```java
+int numChunks = Runtime.getRuntime().availableProcessors();
+long chunkSize = fileSize / numChunks;
+
+String result = IntStream.range(0, numChunks)
+        .parallel()
+        .mapToObj(i -> {
+            long start = i * chunkSize;
+            long end = (i == numChunks - 1) ? fileSize : (i + 1) * chunkSize;
+            return processChunk(fileName, start, end, fileSize);
+        })
+        .collect(chunkResultCollector());
+```
+
+### 2. Memory-Mapped File I/O
+
+Uses `MappedByteBuffer` for efficient, OS-level file access without copying data through Java's I/O layers:
+
+```java
+MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, currentPos, mapSize);
+byte[] segmentData = new byte[mapSize];
+buffer.get(segmentData);
+```
+
+### 3. Cache-Friendly Segment Processing
+
+Chunks are processed in 1MB segments to optimize CPU cache utilization. Handles incomplete lines ("leftovers") across segment boundaries:
+
+```java
+final int SEGMENT_SIZE = 1024 * 1024; // 1MB
+byte[] leftover = new byte[0];
+
+while (currentPos < end) {
+    int mapSize = (int) Math.min(SEGMENT_SIZE, end - currentPos);
+    // ... process segment, handle leftovers
+}
+```
+
+### 4. Line Boundary Adjustment
+
+When splitting the file into chunks, boundaries are adjusted to align with newlines to avoid corrupted data:
+
+```java
+private static long adjustStartToLineBoundary(RandomAccessFile raf, long start) throws IOException {
+    if (start == 0)
+        return start;
+    raf.seek(start);
+    int b;
+    long pos = start;
+    while ((b = raf.read()) != -1) {
+        if (b == '\n')
+            return pos + 1;
+        pos++;
+    }
+    return start;
+}
+```
+
+### 5. FNV-1a Hashing (Avoiding String Creation)
+
+Instead of creating billions of `String` objects for station names, hashes the raw bytes directly using the FNV-1a algorithm. Station names are only created once per unique station:
+
+```java
+// FNV-1a hashing - better distribution than simple polynomial hash
+int hash = 0x811c9dc5; // FNV 32bit offset basis
+for (int i = start; i < semicolonPos; i++) {
+    hash ^= data[i];
+    hash *= 0x01000193; // FNV 32bit prime
+}
+
+// Only create String for new stations (~400 times per chunk)
+result.stationNames.put(hash, new String(data, start, semicolonPos - start, StandardCharsets.UTF_8));
+```
+
+### 6. Integer-Based Temperature Parsing (No Floating Point)
+
+Temperatures are parsed as integers representing tenths of a degree. This avoids floating-point operations entirely during the hot loop:
+
+```java
+// The format is always: -?\d{1,2}\.\d
+int tenths = data[endIndex] - '0';
+int ones = data[endIndex - 2] - '0';  // Skip the '.'
+int temp = ones * 10 + tenths;
+```
+
+### 7. Reverse Parsing
+
+Parses from the end of each line backwards. Since the temperature format is fixed, this allows quick extraction without scanning for the semicolon first:
+
+```java
+byte c = data[endIndex - 3];
+if (c == ';') {
+    // Single digit temp like "3.7"
+    semicolonPos = endIndex - 3;
+} else if (c == '-') {
+    // Negative single digit like "-3.7"
+    temp = -temp;
+    semicolonPos = endIndex - 4;
+} else {
+    // Two digit temp: c is the tens digit
+    temp = (c - '0') * 100 + temp;
+    if (data[endIndex - 4] == '-') {
+        temp = -temp;
+        semicolonPos = endIndex - 5;
+    } else {
+        semicolonPos = endIndex - 4;
+    }
+}
+```
+
+### 8. Fast Path with Map.get()
+
+Uses explicit `null` check instead of `computeIfAbsent()`. The fast path (existing station) avoids lambda overhead ~1 billion times:
+
+```java
+// Fast path - existing station (99.99% of calls)
+Stats stats = result.stats.get(hash);
+if (stats != null) {
+    stats.update(temp);
+    return;
+}
+
+// Slow path - new station (only ~400 times per chunk)
+stats = new Stats();
+stats.update(temp);
+result.stats.put(hash, stats);
+```
+
+### 9. Simple Integer Comparisons
+
+Avoids `Math.min/max` method calls in the hot path:
+
+```java
+public void update(int temp) {
+    if (temp < min)
+        min = temp;
+    if (temp > max)
+        max = temp;
+    sum += temp;
+    count++;
+}
+```
+
+### 10. Custom Collector for Efficient Merging
+
+A custom `Collector` handles the four-phase stream collection: supply, accumulate, combine, and finish. Sorting happens only once in the finisher:
+
+```java
+return Collector.of(
+    MergedChunkResults::new,           // Supplier
+    (merged, chunkResult) -> { ... },  // Accumulator
+    (merged, merged2) -> { ... },      // Combiner (for parallel)
+    merged -> {                        // Finisher - sort and format
+        List<Map.Entry<Integer, Stats>> sortedNames = new ArrayList<>(merged.results.entrySet());
+        sortedNames.sort(Comparator.comparing(e -> merged.stationNames.get(e.getKey())));
+        // Build output string...
+    });
+```
+
+### 11. Java 21+ String Templates
+
+Uses the preview string template feature for clean output formatting:
+
+```java
+joiner.add(STR."\{stationName}=\{stats.toString()}");
+
+// In Stats.toString():
+return STR."\{min / 10.0}/\{mean}/\{max / 10.0}";
+```
+
+### Data Structures
+
+```java
+static class ChunkResult {
+    final Map<Integer, String> stationNames = new HashMap<>(512);  // hash -> name lookup
+    final Map<Integer, Stats> stats = new HashMap<>(512);          // hash -> statistics
+}
+
+static class Stats {
+    int min = Integer.MAX_VALUE;
+    int max = Integer.MIN_VALUE;
+    long sum = 0;  // long to avoid overflow
+    int count = 0;
+}
+```
 
 ----------
 

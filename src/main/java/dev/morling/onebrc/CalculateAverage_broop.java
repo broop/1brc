@@ -335,7 +335,7 @@ public class CalculateAverage_broop {
         int count = 0;
 
         public void update(int temp) {
-            // Simple integer comparisons - faster than Math.min/max for primitives
+            //this is better than Math.min/max for - this gets called in processLine
             if (temp < min)
                 min = temp;
             if (temp > max)
@@ -344,6 +344,7 @@ public class CalculateAverage_broop {
             count++;
         }
 
+        //only gets called in the collector
         public void merge(Stats other) {
             this.min = Math.min(this.min, other.min);
             this.max = Math.max(this.max, other.max);
@@ -353,8 +354,7 @@ public class CalculateAverage_broop {
 
         @Override
         public String toString() {
-            if (count == 0)
-                return "0.0/0.0/0.0";
+            if (count == 0) return "0.0/0.0/0.0";
             double mean = Math.round((double) sum / count) / 10.0;
             return STR."\{min / 10.0}/\{mean}/\{max / 10.0}";
         }
